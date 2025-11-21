@@ -13,4 +13,4 @@ lancement du projet :
 
 ## frontend
 
-[Lien vers le README.md frontend](frontend/README.md)
+Simplement ouvrir dans le navigateur le fichier `index.html`

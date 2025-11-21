@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="fr">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>EcoTrack frontend</title>
+
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 30px;
+            background: #f5f5f5;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+        }
+
+        h2 {
+            margin-top: 0;
+        }
+
+        .row {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        input[type="text"],
+        input[type="password"],
+        input[type="date"] {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+
+        button {
+            padding: 10px 14px;
+            border: none;
+            background: #1976d2;
+            color: #fff;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        button:disabled {
+            background: #9fbce6;
+            cursor: not-allowed;
+        }
+
+        #chartWrapper {
+            margin-top: 30px;
+            display: flex;
+            gap: 20px;
+            align-items: flex-start;
+        }
+
+        canvas {
+            background: #fff;
+            border-radius: 6px;
+        }
+
+        .small {
+            font-size: 13px;
+            color: #666;
+            margin-top: 6px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h2>Authentification</h2>
+        <div class="row" style="margin-bottom:10px;">
+            <input id="email" type="text" placeholder="Email" value="admin" />
+            <input id="password" type="password" placeholder="Password" value="admin" />
+            <button id="btnLogin" onclick="login()">Login</button>
+            <div id="authState" class="small">Non authentifié</div>
+        </div>
+
+        <h2>Stats moyenne des températures</h2>
+
+        <div class="row" style="margin-bottom:12px;">
+            <label>Date début:</label>
+            <input id="dateStart" type="date" />
+            <label>Date fin:</label>
+            <input id="dateEnd" type="date" />
+            <button id="btnLoad" onclick="getTemperatureStats()" disabled>Charger les stats (cela peut prendre du temps)</button>
+        </div>
+
+        <div id="chartWrapper">
+            <div style="flex:1;">
+                <canvas id="temperatureChart" width="600" height="400"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // global
+        let authToken = null;
+        let chartInstance = null;
+
+        async function login() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const payload = { email, password };
+
+            try {
+                document.getElementById('btnLogin').disabled = true;
+                const resp = await fetch('http://localhost:8000/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!resp.ok) {
+                    console.error('Login failed', resp.status, resp.statusText);
+                    alert('Echec authentification : ' + resp.status + ' ' + resp.statusText);
+                    document.getElementById('btnLogin').disabled = false;
+                    return;
+                }
+
+                const body = await resp.json();
+                // Accept token in body.token or body.access_token, fallback to raw body if needed
+                authToken = body.token || body.access_token || (body && typeof body === 'object' ? JSON.stringify(body) : null);
+                document.getElementById('authState').textContent = authToken ? 'Authenticated' : 'Authenticated (no token)';
+                document.getElementById('btnLoad').disabled = false;
+                alert('Authentification ok');
+            } catch (err) {
+                console.error('Login error', err);
+                alert('Error (voir la console)');
+                document.getElementById('btnLogin').disabled = false;
+            }
+        }
+
+        async function getTemperatureStats() {
+            try {
+                const start = document.getElementById('dateStart').value;
+                const end = document.getElementById('dateEnd').value;
+                let url = 'http://localhost:8000/stats/temperature/average';
+                const params = [];
+                if (start) params.push('date_start=' + encodeURIComponent(start));
+                if (end) params.push('date_end=' + encodeURIComponent(end));
+                if (params.length) url += '?' + params.join('&');
+
+                const headers = {};
+                if (authToken) headers['Authorization'] = 'Bearer ' + authToken;
+
+                const resp = await fetch(url, { method: 'GET', headers });
+                if (!resp.ok) {
+                    console.error('Stats request failed', resp.status, resp.statusText);
+                    alert('Impossible de charger les stats: ' + resp.status + ' ' + resp.statusText);
+                    return;
+                }
+
+                // The network tab may show JSON; this await can still throw if JSON malformed
+                const stats = await resp.json();
+
+                // Basic validation
+                if (!stats || typeof stats !== 'object') {
+                    console.error('Unexpected stats payload', stats);
+                    alert('Error (voir la console).');
+                    return;
+                }
+
+                // choose renderer
+                renderAggregatedBarChart(stats)
+
+            } catch (err) {
+                // This catch catches JSON parse errors and rendering errors
+                console.error('Error retrieving temperature stats', err);
+                alert('Error voir la console');
+            }
+        }
+
+
+
+
+
+        function renderAggregatedBarChart(stats) {
+            // Aggregate values by department across all years
+            const aggregated = {}; // { dept: sum_of_values }
+
+            for (const year of Object.keys(stats)) {
+                const inner = stats[year];
+                if (!inner || typeof inner !== "object") continue;
+
+                for (const dept of Object.keys(inner)) {
+                    const v = inner[dept];
+                    const value = (v === null || v === undefined) ? 0 : Number(v);
+                    aggregated[dept] = (aggregated[dept] || 0) + value;
+                }
+            }
+
+            const labels = Object.keys(aggregated).sort((a, b) => parseInt(a) - parseInt(b));
+            const values = labels.map(d => aggregated[d]);
+
+            // Destroy previous chart
+            const ctx = document.getElementById('temperatureChart').getContext('2d');
+            if (chartInstance) chartInstance.destroy();
+
+            // Create bar chart
+            chartInstance = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: "Aggregated Temperature per Department",
+                        data: values,
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        x: {
+                            title: { display: true, text: "Department" }
+                        },
+                        y: {
+                            title: { display: true, text: "Aggregated Temperature" },
+                            beginAtZero: true
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: (ctx) => `${ctx.label}: ${Number(ctx.raw).toFixed(2)}`
+                            }
+                        },
+                        title: {
+                            display: true,
+                            text: "Aggregated Temperature by Department (All Years Combined)"
+                        }
+                    }
+                }
+            });
+        }
+
+
+
+
+
+
+
+    </script>
+</body>
+
+</html>
